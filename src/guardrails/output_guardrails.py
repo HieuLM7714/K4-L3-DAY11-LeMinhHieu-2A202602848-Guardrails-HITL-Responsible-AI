@@ -41,12 +41,13 @@ def content_filter(response: str) -> dict:
 
     # PII patterns to check
     PII_PATTERNS = {
-        # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
+        "phone_vn": r"(?:0|\+84)\d{9,10}\b",
+        "email": r"\b[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}\b",
+        "national_id": r"\b\d{9}\b|\b\d{12}\b",
+        "api_key": r"\bsk-[a-zA-Z0-9-]+\b",
+        "password": r"(?:password|mật\s*khẩu)\s*(?:[:=]|\bis\b)\s*\S+",
+        "admin_password": r"\badmin123\b",
+        "internal_db": r"db\.vinbank\.internal(?::\d+)?",
     }
 
     for name, pattern in PII_PATTERNS.items():
@@ -172,16 +173,27 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # TODO: Implement logic:
         # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
+        cf = content_filter(response_text)
+        if not cf["safe"]:
+            self.redacted_count += 1
+            if hasattr(llm_response, "content") and llm_response.content:
+                llm_response.content.parts = [types.Part.from_text(text=cf["redacted"])]
 
-        return llm_response  # TODO: modify if needed
+        # 2. If use_llm_judge: call llm_safety_check
+        if self.use_llm_judge:
+            current_text = self._extract_text(llm_response)
+            judge_res = await llm_safety_check(current_text)
+            if not judge_res.get("safe", True):
+                self.blocked_count += 1
+                if hasattr(llm_response, "content") and llm_response.content:
+                    llm_response.content.parts = [
+                        types.Part.from_text(
+                            text="I cannot share internal system details or sensitive information."
+                        )
+                    ]
+
+        return llm_response
 
 
 # ============================================================
